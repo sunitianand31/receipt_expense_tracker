@@ -52,12 +52,11 @@ def send_email_summary(subject, message, receiver_email):
     email["from"] = sender_email
     email["subject"] = subject
 
-    with smtplib.SMTP(
+    with smtplib.SMTP_SSL(
         "smtp.gmail.com",
-        587
+        465,
+        timeout=30
     ) as server:
-
-        server.starttls()
 
         server.login(
             sender_email,

@@ -5,11 +5,8 @@ import pandas as pd
 import re
 import os
 import base64
+import smtplib
 from email.mime.text import MIMEText
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 
 
 # ---------------------------------------------------
@@ -23,7 +20,6 @@ st.set_page_config(
 )
 
 st.title("💰 Receipt & Expense Tracker")
-
 st.write(
     "Upload your receipt and let AI extract the expense details."
 )
@@ -39,50 +35,13 @@ client = genai.Client(
 
 
 # ---------------------------------------------------
-# GMAIL FUNCTION
+# GMAIL SMTP FUNCTION
 # ---------------------------------------------------
-
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.send"
-]
-
 
 def send_email_summary(subject, message, receiver_email):
 
-    creds = None
-
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file(
-            "token.json",
-            SCOPES
-        )
-
-   if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        client_config = {
-            "installed": {
-                "client_id": st.secrets["gmail_oauth"]["installed"]["client_id"],
-                "project_id": st.secrets["gmail_oauth"]["installed"]["project_id"],
-                "auth_uri": st.secrets["gmail_oauth"]["installed"]["auth_uri"],
-                "token_uri": st.secrets["gmail_oauth"]["installed"]["token_uri"],
-                "auth_provider_x509_cert_url": st.secrets["gmail_oauth"]["installed"]["auth_provider_x509_cert_url"],
-                "client_secret": st.secrets["gmail_oauth"]["installed"]["client_secret"],
-                "redirect_uris": st.secrets["gmail_oauth"]["installed"]["redirect_uris"]
-            }
-        }
-
-        flow = InstalledAppFlow.from_client_config(
-            client_config,
-            SCOPES
-        )
-        creds = flow.run_local_server(port=0)
-
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
-
     sender_email = st.secrets["email"]["sender"]
+    sender_password = st.secrets["email"]["password"]
 
     email = MIMEText(
         message,
@@ -93,20 +52,23 @@ def send_email_summary(subject, message, receiver_email):
     email["from"] = sender_email
     email["subject"] = subject
 
-    raw_message = base64.urlsafe_b64encode(
-        email.as_bytes()
-    ).decode()
+    with smtplib.SMTP(
+        "smtp.gmail.com",
+        587
+    ) as server:
 
-    service = build(
-        "gmail",
-        "v1",
-        credentials=creds
-    )
+        server.starttls()
 
-    service.users().messages().send(
-        userId="me",
-        body={"raw": raw_message}
-    ).execute()
+        server.login(
+            sender_email,
+            sender_password
+        )
+
+        server.sendmail(
+            sender_email,
+            receiver_email,
+            email.as_string()
+        )
 
 
 # ---------------------------------------------------
@@ -121,8 +83,15 @@ csv_file = "expenses.csv"
 # ---------------------------------------------------
 
 st.divider()
-
 st.header("📊 Expense Dashboard")
+
+
+# Default values
+total_expenses = 0
+total_transactions = 0
+total_categories = 0
+category_total = pd.Series(dtype=float)
+df = pd.DataFrame()
 
 
 if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
@@ -146,8 +115,11 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
         # ---------------------------------------------------
 
         total_expenses = df["Total"].sum()
+
         total_transactions = len(df)
+
         total_categories = df["Category"].nunique()
+
 
         col1, col2, col3 = st.columns(3)
 
@@ -190,7 +162,9 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
             "Category"
         )["Total"].sum()
 
-        with st.expander("📊 View Category-wise Spending"):
+        with st.expander(
+            "📊 View Category-wise Spending"
+        ):
 
             st.bar_chart(
                 category_total,
@@ -214,6 +188,7 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
             subset=["Date"]
         )
 
+
         if not valid_dates.empty:
 
             monthly_total = (
@@ -224,20 +199,25 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
                 .sum()
             )
 
+
             latest_month = monthly_total.index[-1]
+
 
             latest_month_data = valid_dates[
                 valid_dates["Date"].dt.to_period("M")
                 == latest_month
             ]
 
+
             month_expense = latest_month_data[
                 "Total"
             ].sum()
 
+
             average_expense = latest_month_data[
                 "Total"
             ].mean()
+
 
             highest_expense = latest_month_data[
                 "Total"
@@ -270,7 +250,7 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
 
 
             # ---------------------------------------------------
-            # MONTHLY GRAPH - COLLAPSED
+            # MONTHLY GRAPH
             # ---------------------------------------------------
 
             monthly_chart = monthly_total.copy()
@@ -279,7 +259,9 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
                 monthly_chart.index.astype(str)
             )
 
-            with st.expander("📅 View Monthly Spending"):
+            with st.expander(
+                "📅 View Monthly Spending"
+            ):
 
                 st.bar_chart(
                     monthly_chart,
@@ -307,7 +289,9 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
         )
 
 
-        if st.button("✨ Generate AI Insights"):
+        if st.button(
+            "✨ Generate AI Insights"
+        ):
 
             with st.spinner(
                 "AI is analyzing your spending..."
@@ -316,6 +300,7 @@ if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
                 expense_data = df.to_string(
                     index=False
                 )
+
 
                 insight_prompt = f"""
 You are a personal expense analysis assistant.
@@ -348,15 +333,22 @@ Keep the response short and easy to understand.
                 try:
 
                     insight_response = client.models.generate_content(
+
                         model="gemini-3.8-flash",
+
                         contents=insight_prompt,
+
                         config=types.GenerateContentConfig(
+
                             automatic_function_calling=
                             types.AutomaticFunctionCallingConfig(
                                 disable=True
                             )
+
                         )
+
                     )
+
 
                     if insight_response.text:
 
@@ -373,6 +365,7 @@ Keep the response short and easy to understand.
                         st.error(
                             "❌ Gemini returned an empty response."
                         )
+
 
                 except Exception as e:
 
@@ -400,7 +393,9 @@ receiver_email = st.text_input(
 )
 
 
-if st.button("📧 Send Email Summary"):
+if st.button(
+    "📧 Send Email Summary"
+):
 
     if not receiver_email:
 
@@ -408,11 +403,23 @@ if st.button("📧 Send Email Summary"):
             "⚠️ Please enter an email address."
         )
 
-    elif "@" not in receiver_email or "." not in receiver_email:
+
+    elif (
+        "@" not in receiver_email
+        or "." not in receiver_email
+    ):
 
         st.warning(
             "⚠️ Please enter a valid email address."
         )
+
+
+    elif df.empty:
+
+        st.warning(
+            "⚠️ No expense data available to send."
+        )
+
 
     else:
 
@@ -441,9 +448,11 @@ Thank you for using Receipt & Expense Tracker!
                 receiver_email
             )
 
+
             st.success(
                 f"✅ Expense summary sent successfully to {receiver_email}!"
             )
+
 
         except Exception as e:
 
@@ -476,11 +485,14 @@ if uploaded_file:
     )
 
 
-    if st.button("🤖 Analyze Receipt"):
+    if st.button(
+        "🤖 Analyze Receipt"
+    ):
 
         with st.spinner(
             "AI is analyzing your receipt..."
         ):
+
 
             # ---------------------------------------------------
             # GEMINI PROMPT
@@ -515,8 +527,11 @@ write "Not available".
             # ---------------------------------------------------
 
             image_part = types.Part.from_bytes(
+
                 data=uploaded_file.getvalue(),
+
                 mime_type=uploaded_file.type
+
             )
 
 
@@ -527,17 +542,23 @@ write "Not available".
             try:
 
                 response = client.models.generate_content(
+
                     model="gemini-3.8-flash",
+
                     contents=[
                         prompt,
                         image_part
                     ],
+
                     config=types.GenerateContentConfig(
+
                         automatic_function_calling=
                         types.AutomaticFunctionCallingConfig(
                             disable=True
                         )
+
                     )
+
                 )
 
 
@@ -558,9 +579,11 @@ write "Not available".
                     "✅ Receipt analyzed successfully!"
                 )
 
+
                 st.subheader(
                     "📋 Extracted Expense Details"
                 )
+
 
                 st.write(
                     response.text
@@ -607,32 +630,48 @@ write "Not available".
 
 
                 store_name = (
+
                     store.group(1).strip()
+
                     if store
+
                     else "Not available"
+
                 )
 
 
                 purchase_date = (
+
                     date.group(1).strip()
+
                     if date
+
                     else "Not available"
+
                 )
 
 
                 total_amount = (
+
                     total.group(1).replace(",", "")
+
                     if total
+
                     else "0"
+
                 )
 
 
                 expense_category = (
+
                     category.group(1)
                     .strip()
                     .replace("*", "")
+
                     if category
+
                     else "Other"
+
                 )
 
 
@@ -641,10 +680,15 @@ write "Not available".
                 # ---------------------------------------------------
 
                 new_expense = pd.DataFrame([{
+
                     "Store": store_name,
+
                     "Date": purchase_date,
+
                     "Total": float(total_amount),
+
                     "Category": expense_category
+
                 }])
 
 
@@ -653,28 +697,40 @@ write "Not available".
                 # ---------------------------------------------------
 
                 if (
+
                     os.path.exists(csv_file)
+
                     and os.path.getsize(csv_file) > 0
+
                 ):
 
                     new_expense.to_csv(
+
                         csv_file,
+
                         mode="a",
+
                         header=False,
+
                         index=False
+
                     )
 
                 else:
 
                     new_expense.to_csv(
+
                         csv_file,
+
                         index=False
+
                     )
 
 
                 st.success(
                     "💾 Expense saved successfully!"
                 )
+
 
                 st.info(
                     "🔄 Refresh the page to update the dashboard."
